@@ -1,7 +1,7 @@
 const express = require("express");
 const dotenv = require("dotenv");
-const pool = require("./db");
 const { nanoid } = require("nanoid");
+const pool = require("./db");
 const redisClient = require("./redisClient");
 
 dotenv.config();
@@ -16,7 +16,6 @@ app.use(express.json());
 app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");
-
     res.json({
       message: "Server running successfully",
       time: result.rows[0],
@@ -28,11 +27,11 @@ app.get("/", async (req, res) => {
 });
 
 /**
- * Create short URL
+ * CREATE SHORT URL (WITH EXPIRY SUPPORT)
  */
 app.post("/shorten", async (req, res) => {
   try {
-    const { url } = req.body;
+    const { url, expiresInMinutes } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: "URL is required" });
@@ -40,22 +39,37 @@ app.post("/shorten", async (req, res) => {
 
     const shortCode = nanoid(6);
 
+    let expiresAt = null;
+
+    if (expiresInMinutes) {
+      expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+    }
+
     const query = `
-      INSERT INTO urls (original_url, short_code)
-      VALUES ($1, $2)
+      INSERT INTO urls (original_url, short_code, expires_at)
+      VALUES ($1, $2, $3)
       RETURNING *
     `;
 
-    const result = await pool.query(query, [url, shortCode]);
+    const result = await pool.query(query, [
+      url,
+      shortCode,
+      expiresAt,
+    ]);
 
-    // optional cache (only if redis exists)
+    // cache (optional safe usage)
     if (redisClient) {
-      await redisClient.set(shortCode, url);
+      try {
+        await redisClient.set(shortCode, url);
+      } catch (err) {
+        console.error("Redis error:", err);
+      }
     }
 
-    return res.json({
+    res.json({
       originalUrl: result.rows[0].original_url,
-      shortUrl: `http://localhost:3000/${shortCode}`,
+    shortUrl: `${req.protocol}://${req.get("host")}/${shortCode}`,
+      expiresAt: result.rows[0].expires_at,
     });
 
   } catch (error) {
@@ -65,7 +79,7 @@ app.post("/shorten", async (req, res) => {
 });
 
 /**
- * Redirect (Redis cache-first, safe for production)
+ * REDIRECT WITH CACHE + EXPIRY CHECK
  */
 app.get("/:shortCode", async (req, res) => {
   try {
@@ -73,7 +87,7 @@ app.get("/:shortCode", async (req, res) => {
 
     let cachedUrl = null;
 
-    // SAFE Redis usage (only if available)
+    // Redis check (safe fallback)
     if (redisClient) {
       try {
         cachedUrl = await redisClient.get(shortCode);
@@ -82,21 +96,8 @@ app.get("/:shortCode", async (req, res) => {
       }
     }
 
-    console.log("Redis hit or miss check:", cachedUrl ? "HIT" : "MISS");
-
-    // CACHE HIT
-    if (cachedUrl) {
-      pool.query(
-        "UPDATE urls SET clicks = clicks + 1 WHERE short_code = $1",
-        [shortCode]
-      );
-
-      return res.redirect(cachedUrl);
-    }
-
-    // CACHE MISS → DB lookup
     const result = await pool.query(
-      "SELECT original_url FROM urls WHERE short_code = $1",
+      "SELECT * FROM urls WHERE short_code = $1",
       [shortCode]
     );
 
@@ -104,24 +105,29 @@ app.get("/:shortCode", async (req, res) => {
       return res.status(404).json({ error: "URL not found" });
     }
 
-    const originalUrl = result.rows[0].original_url;
+    const data = result.rows[0];
 
-    // store in cache if possible
-    if (redisClient) {
-      try {
-        await redisClient.set(shortCode, originalUrl);
-      } catch (err) {
-        console.error("Redis write error:", err);
-      }
+    // EXPIRY CHECK
+    if (data.expires_at && new Date() > new Date(data.expires_at)) {
+      return res.status(410).json({ error: "Link has expired" });
     }
 
-    // update clicks
+    // increment clicks
     await pool.query(
       "UPDATE urls SET clicks = clicks + 1 WHERE short_code = $1",
       [shortCode]
     );
 
-    return res.redirect(originalUrl);
+    // cache if not already cached
+    if (redisClient && !cachedUrl) {
+      try {
+        await redisClient.set(shortCode, data.original_url);
+      } catch (err) {
+        console.error("Redis write error:", err);
+      }
+    }
+
+    return res.redirect(data.original_url);
 
   } catch (error) {
     console.error(error);
@@ -130,32 +136,22 @@ app.get("/:shortCode", async (req, res) => {
 });
 
 /**
- * Analytics endpoint
+ * ANALYTICS
  */
 app.get("/stats/:shortCode", async (req, res) => {
   try {
     const { shortCode } = req.params;
 
-    const query = `
-      SELECT original_url, short_code, clicks, created_at
-      FROM urls
-      WHERE short_code = $1
-    `;
-
-    const result = await pool.query(query, [shortCode]);
+    const result = await pool.query(
+      "SELECT * FROM urls WHERE short_code = $1",
+      [shortCode]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "URL not found" });
     }
 
-    const data = result.rows[0];
-
-    res.json({
-      shortCode: data.short_code,
-      originalUrl: data.original_url,
-      clicks: data.clicks,
-      createdAt: data.created_at,
-    });
+    res.json(result.rows[0]);
 
   } catch (error) {
     console.error(error);

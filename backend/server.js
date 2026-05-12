@@ -12,25 +12,27 @@ const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://url-shortener-62ae.onrender.com" 
+  "https://your-frontend-domain.com" // 🔁 Replace with your actual frontend URL once deployed
 ];
 
-app.use(cors({
+const corsOptions = {
   origin: function (origin, callback) {
-
+    // Allow requests with no origin (e.g. mobile apps, curl, Postman)
     if (!origin) return callback(null, true);
 
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     } else {
-      return callback(null, true); 
+      return callback(new Error(`CORS policy: origin ${origin} not allowed`));
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
-}));
+};
 
-app.options("*", cors());
+// ✅ Apply CORS and handle preflight early, before any other middleware
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // 🔁 Now uses the same options, not a bare cors()
 
 app.use(express.json());
 
@@ -106,7 +108,6 @@ app.get("/:shortCode", async (req, res) => {
 
     const data = result.rows[0];
 
-    // expiry check
     if (data.expires_at && new Date() > new Date(data.expires_at)) {
       return res.status(410).json({ error: "Link has expired" });
     }

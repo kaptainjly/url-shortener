@@ -1,19 +1,30 @@
 const express = require("express");
+const cors = require("cors");
 const dotenv = require("dotenv");
 const { nanoid } = require("nanoid");
-const pool = require("../db");
-const redisClient = require("../redisClient");
-const cors = require("cors");
+
+const pool = require("./db");
+const redisClient = require("./redisClient");
 
 dotenv.config();
 
 const app = express();
 
+/**
+ * ✅ CORS FIX (IMPORTANT)
+ */
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
+app.options("*", cors());
+
 app.use(express.json());
-app.use(cors());
 
 /**
- * Health check
+ * HEALTH CHECK
  */
 app.get("/", async (req, res) => {
   try {
@@ -29,7 +40,7 @@ app.get("/", async (req, res) => {
 });
 
 /**
- * CREATE SHORT URL (WITH EXPIRY SUPPORT)
+ * CREATE SHORT URL (WITH EXPIRY)
  */
 app.post("/shorten", async (req, res) => {
   try {
@@ -47,30 +58,18 @@ app.post("/shorten", async (req, res) => {
       expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
     }
 
-    const query = `
-      INSERT INTO urls (original_url, short_code, expires_at)
-      VALUES ($1, $2, $3)
-      RETURNING *
-    `;
+    const result = await pool.query(
+      `INSERT INTO urls (original_url, short_code, expires_at)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [url, shortCode, expiresAt]
+    );
 
-    const result = await pool.query(query, [
-      url,
-      shortCode,
-      expiresAt,
-    ]);
-
-    // cache (optional safe usage)
-    if (redisClient) {
-      try {
-        await redisClient.set(shortCode, url);
-      } catch (err) {
-        console.error("Redis error:", err);
-      }
-    }
+    const shortUrl = `${req.protocol}://${req.get("host")}/${shortCode}`;
 
     res.json({
       originalUrl: result.rows[0].original_url,
-    shortUrl: `${req.protocol}://${req.get("host")}/${shortCode}`,
+      shortUrl,
       expiresAt: result.rows[0].expires_at,
     });
 
@@ -81,22 +80,11 @@ app.post("/shorten", async (req, res) => {
 });
 
 /**
- * REDIRECT WITH CACHE + EXPIRY CHECK
+ * REDIRECT
  */
 app.get("/:shortCode", async (req, res) => {
   try {
     const { shortCode } = req.params;
-
-    let cachedUrl = null;
-
-    // Redis check (safe fallback)
-    if (redisClient) {
-      try {
-        cachedUrl = await redisClient.get(shortCode);
-      } catch (err) {
-        console.error("Redis read error:", err);
-      }
-    }
 
     const result = await pool.query(
       "SELECT * FROM urls WHERE short_code = $1",
@@ -109,25 +97,15 @@ app.get("/:shortCode", async (req, res) => {
 
     const data = result.rows[0];
 
-    // EXPIRY CHECK
+    // expiry check
     if (data.expires_at && new Date() > new Date(data.expires_at)) {
       return res.status(410).json({ error: "Link has expired" });
     }
 
-    // increment clicks
     await pool.query(
       "UPDATE urls SET clicks = clicks + 1 WHERE short_code = $1",
       [shortCode]
     );
-
-    // cache if not already cached
-    if (redisClient && !cachedUrl) {
-      try {
-        await redisClient.set(shortCode, data.original_url);
-      } catch (err) {
-        console.error("Redis write error:", err);
-      }
-    }
 
     return res.redirect(data.original_url);
 

@@ -6,7 +6,6 @@ const pool = require("./db");
 const redisClient = require("./redisClient");
 
 dotenv.config();
-console.log("SERVER VERSION: CORS-FIX-1");
 
 const app = express();
 

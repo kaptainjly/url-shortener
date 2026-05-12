@@ -10,8 +10,22 @@ dotenv.config();
 
 const app = express();
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://url-shortener-62ae.onrender.com" // your backend (safe to include)
+];
+
 app.use(cors({
-  origin: "*",
+  origin: function (origin, callback) {
+    // allow requests with no origin (like Postman or mobile apps)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    } else {
+      return callback(null, true); // TEMP: allow all (avoids Render CORS issues)
+    }
+  },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
@@ -20,7 +34,9 @@ app.options("*", cors());
 
 app.use(express.json());
 
-
+/**
+ * HEALTH CHECK
+ */
 app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");
@@ -35,7 +51,7 @@ app.get("/", async (req, res) => {
 });
 
 /**
- * CREATE SHORT URL (WITH EXPIRY)
+ * SHORTEN URL
  */
 app.post("/shorten", async (req, res) => {
   try {
@@ -50,7 +66,7 @@ app.post("/shorten", async (req, res) => {
     let expiresAt = null;
 
     if (expiresInMinutes) {
-      expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+      expiresAt = new Date(Date.now() + expiresInMinutes * 60000);
     }
 
     const result = await pool.query(
@@ -111,7 +127,7 @@ app.get("/:shortCode", async (req, res) => {
 });
 
 /**
- * ANALYTICS
+ * STATS
  */
 app.get("/stats/:shortCode", async (req, res) => {
   try {

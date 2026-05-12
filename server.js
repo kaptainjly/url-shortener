@@ -48,6 +48,11 @@ app.post("/shorten", async (req, res) => {
 
     const result = await pool.query(query, [url, shortCode]);
 
+    // optional cache (only if redis exists)
+    if (redisClient) {
+      await redisClient.set(shortCode, url);
+    }
+
     return res.json({
       originalUrl: result.rows[0].original_url,
       shortUrl: `http://localhost:3000/${shortCode}`,
@@ -60,19 +65,27 @@ app.post("/shorten", async (req, res) => {
 });
 
 /**
- * Redirect with Redis cache (fast path)
+ * Redirect (Redis cache-first, safe for production)
  */
 app.get("/:shortCode", async (req, res) => {
   try {
     const { shortCode } = req.params;
 
-    // 1. Check Redis first
-    const cachedUrl = await redisClient.get(shortCode);
+    let cachedUrl = null;
+
+    // SAFE Redis usage (only if available)
+    if (redisClient) {
+      try {
+        cachedUrl = await redisClient.get(shortCode);
+      } catch (err) {
+        console.error("Redis read error:", err);
+      }
+    }
 
     console.log("Redis hit or miss check:", cachedUrl ? "HIT" : "MISS");
 
+    // CACHE HIT
     if (cachedUrl) {
-      // update clicks (non-blocking)
       pool.query(
         "UPDATE urls SET clicks = clicks + 1 WHERE short_code = $1",
         [shortCode]
@@ -81,7 +94,7 @@ app.get("/:shortCode", async (req, res) => {
       return res.redirect(cachedUrl);
     }
 
-    // 2. Fallback to PostgreSQL
+    // CACHE MISS → DB lookup
     const result = await pool.query(
       "SELECT original_url FROM urls WHERE short_code = $1",
       [shortCode]
@@ -93,10 +106,16 @@ app.get("/:shortCode", async (req, res) => {
 
     const originalUrl = result.rows[0].original_url;
 
-    // 3. Save to Redis
-    await redisClient.set(shortCode, originalUrl);
+    // store in cache if possible
+    if (redisClient) {
+      try {
+        await redisClient.set(shortCode, originalUrl);
+      } catch (err) {
+        console.error("Redis write error:", err);
+      }
+    }
 
-    // 4. Update clicks
+    // update clicks
     await pool.query(
       "UPDATE urls SET clicks = clicks + 1 WHERE short_code = $1",
       [shortCode]

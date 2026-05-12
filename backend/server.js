@@ -12,18 +12,18 @@ const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://url-shortener-62ae.onrender.com" // your backend (safe to include)
+  "https://url-shortener-62ae.onrender.com" 
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // allow requests with no origin (like Postman or mobile apps)
+
     if (!origin) return callback(null, true);
 
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     } else {
-      return callback(null, true); // TEMP: allow all (avoids Render CORS issues)
+      return callback(null, true); 
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -34,9 +34,7 @@ app.options("*", cors());
 
 app.use(express.json());
 
-/**
- * HEALTH CHECK
- */
+
 app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");

@@ -10,9 +10,6 @@ dotenv.config();
 
 const app = express();
 
-/**
- * ✅ CORS FIX (IMPORTANT)
- */
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -23,9 +20,7 @@ app.options("*", cors());
 
 app.use(express.json());
 
-/**
- * HEALTH CHECK
- */
+
 app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");

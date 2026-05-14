@@ -9,7 +9,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const API_BASE = "https://shrty.onrender.com";
+  const API_BASE = "https://url-shortener-62ae.onrender.com";
 
   const shortenUrl = async () => {
     try {
@@ -39,7 +39,7 @@ function App() {
   return (
     <div className="container">
       <div className="card">
-        <h1>URL Shortener</h1>
+        <h1>Shrty</h1>
 
         <input
           type="text"
